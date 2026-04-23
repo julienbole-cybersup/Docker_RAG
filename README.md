@@ -16,8 +16,3 @@ L’application propose :
 - **RAG** : recherche des passages pertinents + génération de réponse via un LLM  
 - **Interface utilisateur** : Streamlit pour interagir facilement avec le système  
 - **Docker** : déploiement reproductible avec un seul service  
-
----
-
-## 🧱 Architecture du projet
-
