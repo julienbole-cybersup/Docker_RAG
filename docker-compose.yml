@@ -1,0 +1,12 @@
+services:
+
+  streamlit:
+    build: .
+    container_name: rag_streamlit
+    env_file:
+      - .env
+    volumes:
+      - ./chroma_db:/app/chroma_db
+    ports:
+      - "8501:8501"
+    command: streamlit run home.py --server.address=0.0.0.0
