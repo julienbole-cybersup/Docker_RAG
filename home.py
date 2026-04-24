@@ -112,11 +112,15 @@ with st.sidebar:
     for q in examples:
         if st.button(q, use_container_width=True):
             st.session_state.example_question = q
+    
+    # Ne pas charger le RAG si on est en mode test
+    if "--test" in sys.argv:
+        st.stop()
 
 # -----------------------------
 # CHARGEMENT DU RAG
 # -----------------------------
-if "rag_chain" not in st.session_state:
+if "--test" not in sys.argv and "rag_chain" not in st.session_state:
     with st.spinner("Chargement du modèle IA..."):
         try:
             rag = build_rag_chain()
