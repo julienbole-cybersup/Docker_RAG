@@ -1,7 +1,5 @@
 """
-rag.py — RAG France Travail · Formation Docker J2
-Retrieval + génération avec Groq (Llama 3.3-70b).
-À lancer après ingest.py.
+rag.py — RAG France Travail
 """
 
 import os
@@ -13,136 +11,145 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-# TODO : remplacer par votre clé API Groq
-# Créer un compte sur https://console.groq.com → API Keys → Create API Key
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# CORRECTION : vérification immédiate de la clé API au chargement du module
+if not GROQ_API_KEY:
+    raise EnvironmentError(
+        "Variable d'environnement GROQ_API_KEY manquante. "
+        "Vérifiez votre fichier .env à la racine du projet."
+    )
 
-# ── Construction de la chain RAG ──────────────────────────────────────────────
 
-def build_rag_chain(persist_dir: str = "./chroma_db"):
+# ───────────────────────────────────────────────
+# FONCTIONS MATCHING PROFIL ↔ OFFRES
+# ───────────────────────────────────────────────
+
+def embed_profil(profil: dict, embedder) -> list[float]:
+    texte = (
+        f"Compétences : {profil['competences']}\n"
+        f"Expérience : {profil['experience']} ans\n"
+        f"Niveau d'étude : {profil['niveau']}\n"
+        f"Métier visé : {profil['metier_vise']}\n"
+        f"Localisation : {profil['localisation']}"
+    )
+    return embedder.embed_query(texte)
+
+
+def rechercher_offres_similaires(profil_embedding: list[float], collection, n: int = 5):
+    docs = collection.similarity_search_by_vector(
+        embedding=profil_embedding,
+        k=n
+    )
+    return docs
+
+
+def expliquer_matching(profil: dict, offres: list, llm) -> str:
     """
-    Construit la chaine RAG complète avec LCEL.
+    Demande au LLM d'expliquer la correspondance profil ↔ offres.
+    CORRECTION : on extrait .content pour retourner une str propre.
+    """
+    offres_texte = "\n\n".join(
+        f"Offre {i+1} :\n{doc.page_content}" for i, doc in enumerate(offres)
+    )
 
-    Une chain LCEL se lit de gauche à droite avec | :
-        retriever → prompt → llm → output_parser
+    prompt = (
+        "Voici un profil candidat :\n"
+        f"{profil}\n\n"
+        "Voici des offres d'emploi trouvées :\n"
+        f"{offres_texte}\n\n"
+        "Explique en quoi ces offres correspondent au profil.\n"
+        "Donne :\n"
+        "- un score de compatibilité (0 à 100)\n"
+        "- les compétences correspondantes\n"
+        "- les compétences manquantes\n"
+        "- pourquoi l'offre est pertinente"
+    )
 
-    Args:
-        persist_dir : dossier ChromaDB créé par ingest.py
+    # CORRECTION : .invoke() retourne un AIMessage — on extrait .content
+    response = llm.invoke(prompt)
+    return response.content if hasattr(response, "content") else str(response)
+
+
+# ───────────────────────────────────────────────
+# CONSTRUCTION DE LA CHAÎNE RAG
+# ───────────────────────────────────────────────
+
+def build_rag_chain(persist_dir: str = "./chroma_db") -> dict:
+    """
+    Construit et retourne la chaîne RAG complète.
 
     Returns:
-        chain LCEL prête à invoquer avec chain.invoke(question)
-
-    TODO (dans l'ordre) :
-        1. Instancier HuggingFaceEmbeddings avec le même modèle que ingest.py
-        2. Charger la base ChromaDB depuis persist_dir
-        3. Créer un retriever à partir du vectorstore (chercher dans la doc : as_retriever)
-        4. Instancier le LLM ChatGroq — modèle : llama-3.3-70b-versatile, temperature : 0
-        5. Écrire le prompt — il doit contenir deux variables : {context} et {question}
-           context = les chunks retrouvés / question = la question de l'utilisateur
-        6. Écrire format_docs — les chunks sont des Documents, extraire page_content
-           et les assembler en une seule chaîne
-        7. Assembler la chain — elle se lit de gauche à droite avec |
-           entrée → retriever → prompt → llm → parser → sortie
-        8. Retourner la chain
+        dict avec les clés : chain, embedder, collection, llm
     """
 
-    # Étape 1 — Embeddings
-    # Utiliser exactement le même modèle que dans ingest.py
-    # --- votre code ici ---
-    print("Chargement du modèle d'embeddings (1-2 min la première fois)…")
-    embeddings = HuggingFaceEmbeddings(
+    # 1 — Embeddings
+    print("Chargement du modèle d'embeddings…")
+    embedder = HuggingFaceEmbeddings(
         model_name="paraphrase-multilingual-MiniLM-L12-v2"
     )
 
-    # Étape 2 — Chargement ChromaDB
-    # La base a déjà été créée par ingest.py — on la charge depuis le disque
-    # --- votre code ici ---
+    # 2 — Chargement ChromaDB
     try:
-        vectorstore = Chroma(persist_directory=persist_dir, embedding_function=embeddings)
-        nb_docs = vectorstore._collection.count()
-        if nb_docs == 0:
-            raise ValueError("La base ChromaDB est vide.")
-        print(f"Base ChromaDB chargée avec succès ({nb_docs} documents).")
+        collection = Chroma(
+            persist_directory=persist_dir,
+            embedding_function=embedder
+        )
+        nb_docs = collection._collection.count()
+        print(f"Base ChromaDB chargée ({nb_docs} documents).")
     except Exception as e:
-        print("Erreur : impossible de charger la base documentaire ChromaDB.")
-        print(f"Détail : {e}")
-        raise SystemExit("Arrêt du programme : la base documentaire est introuvable ou corrompue.")
+        raise RuntimeError(f"Impossible de charger ChromaDB : {e}")
 
+    # 3 — Retriever
+    retriever = collection.as_retriever(search_kwargs={"k": 4})
 
-    # Étape 3 — Retriever
-    # Le retriever est l'objet qui fait la recherche dans ChromaDB
-    # Il prend une question en entrée et retourne les k chunks les plus proches
-    # --- votre code ici ---
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+    # 4 — LLM Groq
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=GROQ_API_KEY,
+        temperature=0
+    )
 
-    # Étape 4 — LLM
-    # ChatGroq est le client pour appeler Llama via l'API Groq
-    # La clé API est dans le .env — load_dotenv() s'en charge automatiquement
-    # --- votre code ici ---
-    llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=GROQ_API_KEY, temperature=0)
-
-    # Étape 5 — Prompt
-    # Le prompt est le message envoyé au LLM
-    # Il doit contenir {context} (les chunks) et {question} (la question utilisateur)
-    # --- votre code ici ---
+    # 5 — Prompt
     prompt = ChatPromptTemplate.from_template("""
-    Tu es un assistant spécialisé dans l'analyse du marché de l'emploi data en France.
-    Utilise uniquement les offres d'emploi ci-dessous pour répondre à la question.
-    Si tu ne trouves pas la réponse dans les offres, dis-le clairement. 
+Tu es un assistant spécialisé dans l'analyse du marché de l'emploi en France.
+Utilise uniquement les offres d'emploi ci-dessous pour répondre.
 
-    Offres d'emploi :
-    {context}
+Offres d'emploi :
+{context}
 
-    Question : {question}
+Question : {question}
 
-    Réponse :""")
+Réponse :
+""")
 
-    # Étape 6 — Formatage des chunks
-    # Les chunks sont des objets Document avec un attribut page_content
-    # Cette fonction les assemble en une seule chaîne de texte
-    # --- votre code ici ---
+    # 6 — Formatage des documents
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
+    # 7 — Assemblage LCEL
+    chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
 
-    # Étape 7 — Assemblage de la chain LCEL
-    # On connecte tous les éléments avec | dans l'ordre logique du pipeline
-    # --- votre code ici ---
-    assemblage = ({"context": retriever | format_docs, "question": RunnablePassthrough()} | prompt | llm | StrOutputParser())
+    # 8 — Retour complet pour Streamlit
+    return {
+        "chain":      chain,
+        "embedder":   embedder,
+        "collection": collection,
+        "llm":        llm,
+    }
 
-    return assemblage
+
+# ───────────────────────────────────────────────
+# MODE TEST
+# ───────────────────────────────────────────────
 
 if __name__ == "__main__":
-    assemblage = build_rag_chain()
-
-    questions = [
-        # Categorie 1
-        "Je cherche un poste où je peux apprendre rapidement sur des projets variés.",
-        "Quelles offres correspondent à quelqu'un qui sort d'un master IA ?",
-        "Je veux un poste avec de la technique mais aussi du contact avec des clients.",
-
-        # Categ 2
-        "Quelles offres mentionnent la possibilité de travailler à distance ?",
-        "Y a-t-il des postes qui parlent d'un environnement startup ou scale-up ?",
-
-        # Categ 3 
-        "Quelles offres mentionnent Python ?",
-        "Quelles offres parlent de machine learning ?",
-
-        # Categ 4
-        "Quel outil MLOps est le plus demandé dans les offres ?",
-        "Combien d'offres mentionnent Docker ?",
-
-        # Categ 5
-        "Montre-moi toutes les offres où il y a le mot Docker.",
-        "Montre-moi toutes les offres où il y a le mot Spark.",
-        "Montre-moi toutes les offres où il y a le mot Kubernetes.",
-    ]
-
-    for q in questions:
-        print(f"\n{'='*60}")
-        print(f"Question : {q}")
-        print(f"{'='*60}")
-        print(assemblage.invoke(q))
+    rag = build_rag_chain()
+    chain = rag["chain"]
+    print(chain.invoke("Quelles offres mentionnent Python ?"))
