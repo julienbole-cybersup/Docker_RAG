@@ -5,6 +5,10 @@ from utils.rag import build_rag_chain
 import time
 import sys
 
+if "--test" in sys.argv:
+    print("Home.py OK")
+    sys.exit(0)
+
 # Page configuration
 st.set_page_config(
     page_title="RAG France Travail",

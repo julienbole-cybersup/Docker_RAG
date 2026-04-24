@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
 
   streamlit:
@@ -5,6 +7,8 @@ services:
     container_name: rag_streamlit
     env_file:
       - .env
+    environment:
+      CHROMA_DB_DIR: /app/chroma_db
     volumes:
       - ./chroma_db:/app/chroma_db
     ports:
