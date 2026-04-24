@@ -12,16 +12,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
 load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-# CORRECTION : vérification immédiate de la clé API au chargement du module
-if not GROQ_API_KEY:
-    raise EnvironmentError(
-        "Variable d'environnement GROQ_API_KEY manquante. "
-        "Vérifiez votre fichier .env à la racine du projet."
-    )
-
-
 # ───────────────────────────────────────────────
 # FONCTIONS MATCHING PROFIL ↔ OFFRES
 # ───────────────────────────────────────────────
@@ -83,6 +73,12 @@ def build_rag_chain(persist_dir: str = "./chroma_db") -> dict:
     Returns:
         dict avec les clés : chain, embedder, collection, llm
     """
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    if not GROQ_API_KEY:
+        raise EnvironmentError(
+            "Variable d'environnement GROQ_API_KEY manquante. "
+            "Vérifiez votre fichier .env à la racine du projet."
+        )
 
     # 1 — Embeddings
     print("Chargement du modèle d'embeddings…")
@@ -113,16 +109,16 @@ def build_rag_chain(persist_dir: str = "./chroma_db") -> dict:
 
     # 5 — Prompt
     prompt = ChatPromptTemplate.from_template("""
-Tu es un assistant spécialisé dans l'analyse du marché de l'emploi en France.
-Utilise uniquement les offres d'emploi ci-dessous pour répondre.
+    Tu es un assistant spécialisé dans l'analyse du marché de l'emploi en France.
+    Utilise uniquement les offres d'emploi ci-dessous pour répondre.
 
-Offres d'emploi :
-{context}
+    Offres d'emploi :
+    {context}
 
-Question : {question}
+    Question : {question}
 
-Réponse :
-""")
+    Réponse :
+    """)
 
     # 6 — Formatage des documents
     def format_docs(docs):
